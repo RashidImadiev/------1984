@@ -151,7 +151,7 @@
     position: fixed;
     left: 50%;
     transform: translateX(-50%);
-    z-index: 9999999999999;
+    z-index: 10001;
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -593,17 +593,19 @@ document.addEventListener("DOMContentLoaded", function() {
     const listenSelBtn = document.getElementById('listen-selection-btn');
     let currentSelectionText = '';
 
-    // ===== Всплывающее окно с транскрипцией/переводом одиночного слова =====
+    // ===== Всплывающее окно с переводом (для одного слова — с транскрипцией
+    // и вариантами значений; для фразы/предложения — с одним переводом по смыслу) =====
     const wordPopup = document.getElementById('word-popup');
+    const wordPopupTranscriptionRow = document.getElementById('word-popup-transcription-row');
     const wordPopupTranscription = document.getElementById('word-popup-transcription');
     const wordPopupVariants = document.getElementById('word-popup-variants');
     const wordPopupSpeakBtn = document.getElementById('word-popup-speak-btn');
-    let currentPopupWord = '';
+    let currentPopupText = '';
     let wordRequestToken = 0;
 
     function hideWordPopup() {
         wordPopup.style.display = 'none';
-        currentPopupWord = '';
+        currentPopupText = '';
         wordRequestToken++;
     }
 
@@ -622,45 +624,62 @@ document.addEventListener("DOMContentLoaded", function() {
     positionSelectionArea();
     window.addEventListener('resize', positionSelectionArea);
 
-    async function showWordPopupFor(word) {
+    async function showPopupFor(text, isSingleWord) {
         const myToken = ++wordRequestToken;
-        currentPopupWord = word;
+        currentPopupText = text;
 
-        wordPopupTranscription.textContent = '…';
         wordPopupVariants.textContent = 'Перевод…';
         wordPopup.style.display = 'block';
 
-        const [result, transcription] = await Promise.all([
-            translateWithGoogle(word, true),
-            getTranscription(word)
-        ]);
+        if (isSingleWord) {
+            // Одиночное слово: показываем транскрипцию и несколько вариантов перевода
+            wordPopupTranscriptionRow.style.display = 'flex';
+            wordPopupTranscription.textContent = '…';
 
-        if (myToken !== wordRequestToken) return;
+            const [result, transcription] = await Promise.all([
+                translateWithGoogle(text, true),
+                getTranscription(text)
+            ]);
 
-        wordPopupTranscription.textContent = transcription || '(транскрипция не найдена)';
+            if (myToken !== wordRequestToken) return;
 
-        const allVariants = [];
-        if (result.translation) allVariants.push(result.translation);
-        if (result.variants && result.variants.length) {
-            result.variants.forEach(function(v) {
-                if (allVariants.indexOf(v) === -1) allVariants.push(v);
-            });
-        }
+            wordPopupTranscription.textContent = transcription || '(транскрипция не найдена)';
 
-        wordPopupVariants.innerHTML = '';
-        if (allVariants.length === 0) {
-            wordPopupVariants.textContent = '(перевод не найден)';
+            const allVariants = [];
+            if (result.translation) allVariants.push(result.translation);
+            if (result.variants && result.variants.length) {
+                result.variants.forEach(function(v) {
+                    if (allVariants.indexOf(v) === -1) allVariants.push(v);
+                });
+            }
+
+            wordPopupVariants.innerHTML = '';
+            if (allVariants.length === 0) {
+                wordPopupVariants.textContent = '(перевод не найден)';
+            } else {
+                allVariants.forEach(function(v) {
+                    const line = document.createElement('div');
+                    line.textContent = v;
+                    wordPopupVariants.appendChild(line);
+                });
+            }
         } else {
-            allVariants.forEach(function(v) {
-                const line = document.createElement('div');
-                line.textContent = v;
-                wordPopupVariants.appendChild(line);
-            });
+            // Фраза или предложение: только один перевод по смыслу, без транскрипции
+            wordPopupTranscriptionRow.style.display = 'none';
+
+            const result = await translateWithGoogle(text, false);
+
+            if (myToken !== wordRequestToken) return;
+
+            wordPopupVariants.innerHTML = '';
+            const line = document.createElement('div');
+            line.textContent = result.translation || '(перевод не найден)';
+            wordPopupVariants.appendChild(line);
         }
     }
 
     wordPopupSpeakBtn.addEventListener('click', function() {
-        playPronunciation(currentPopupWord);
+        playPronunciation(currentPopupText);
     });
 
     function updateToolbarFromSelection() {
@@ -687,9 +706,8 @@ document.addEventListener("DOMContentLoaded", function() {
         const words = cleanText.split(' ').filter(Boolean);
         const isSingleWord = words.length === 1;
 
-        if (!isSingleWord) hideWordPopup();
-        if (isSingleWord && cleanText !== currentPopupWord) {
-            showWordPopupFor(cleanText);
+        if (cleanText !== currentPopupText) {
+            showPopupFor(cleanText, isSingleWord);
         }
     }
 
