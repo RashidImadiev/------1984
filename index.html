@@ -148,8 +148,9 @@
      Расположена ФИКСИРОВАННО под главной панелью (а не под выделенным текстом) —
      её положение вычисляется один раз в JS относительно нижнего края bookmark-panel. -->
 <div id="selection-area" style="
-    position: fixed;
-    left: 50%;
+    position: fixed !important; 
+    right: 0 !important; 
+    left: auto !important;
     transform: translateX(-50%);
     z-index: 10001;
     display: flex;
