@@ -119,6 +119,18 @@
         К закладке
     </button>
 
+    <button id="save-selection-btn" style="
+        padding: 8px 12px; 
+        background-color: #20c997; 
+        color: white; 
+        border: none; 
+        border-radius: 4px; 
+        cursor: pointer;
+        font-weight: bold;
+        font-size: 14px;">
+        Сохранить
+    </button>
+
     <button id="open-library" style="
         padding: 8px 12px; 
         background-color: #6f42c1; 
@@ -142,102 +154,6 @@
         font-size: 14px;">
         Корзина
     </button>
-</div>
-
-<!-- Область с кнопками "Сохранить/Прослушать" и всплывающим окном слова.
-     Расположена ФИКСИРОВАННО под главной панелью (а не под выделенным текстом) —
-     её положение вычисляется один раз в JS относительно нижнего края bookmark-panel. -->
-<div id="selection-area" style="
-    position: fixed !important; 
-    right: 0 !important; 
-    left: auto !important;
-    transform: translateX(-50%);
-    z-index: 10001;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 8px;
-    width: max-content;
-    max-width: calc(100vw - 20px);
-    font-family: sans-serif;">
-
-    <div id="selection-toolbar" style="
-        display: none;
-        gap: 6px;
-        white-space: nowrap;">
-        <button id="save-selection-btn" style="
-            padding: 6px 10px;
-            background-color: #28a745;
-            color: white;
-            border: none;
-            border-radius: 4px;
-            cursor: pointer;
-            font-weight: bold;
-            font-size: 13px;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.25);
-            white-space: nowrap;">
-            ⭐ Сохранить
-        </button>
-        <button id="listen-selection-btn" style="
-            padding: 6px 10px;
-            background-color: #17a2b8;
-            color: white;
-            border: none;
-            border-radius: 4px;
-            cursor: pointer;
-            font-weight: bold;
-            font-size: 13px;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.25);
-            white-space: nowrap;">
-            🔊 Прослушать
-        </button>
-    </div>
-
-    <!-- Всплывающее окно с транскрипцией и вариантами перевода одиночного слова -->
-    <div id="word-popup" style="
-        display: none;
-        min-width: 160px;
-        max-width: 260px;
-        background: #fff;
-        border-radius: 8px;
-        box-shadow: 0 4px 16px rgba(0,0,0,0.25);
-        padding: 10px 12px;
-        box-sizing: border-box;">
-        <div id="word-popup-transcription-row" style="
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            padding-bottom: 6px;
-            margin-bottom: 6px;
-            border-bottom: 1px solid #eee;">
-            <span id="word-popup-transcription" style="
-                font-style: italic;
-                color: #555;
-                font-size: 14px;
-                flex: 1;">…</span>
-            <button id="word-popup-speak-btn" title="Прослушать произношение" style="
-                flex-shrink: 0;
-                width: 28px;
-                height: 28px;
-                padding: 0;
-                background-color: #17a2b8;
-                color: white;
-                border: none;
-                border-radius: 50%;
-                cursor: pointer;
-                font-size: 14px;">
-                🔊
-            </button>
-        </div>
-        <div id="word-popup-variants" style="
-            display: flex;
-            flex-direction: column;
-            gap: 3px;
-            font-size: 14px;
-            color: #333;">
-            …
-        </div>
-    </div>
 </div>
 
 <!-- Окно "Словарь" -->
@@ -436,60 +352,103 @@ document.addEventListener("DOMContentLoaded", function() {
         }
     }
 
-    // ===== Перевод через Google Translate (публичный веб-эндпоинт, без ключа) =====
+    // ===== Перевод: несколько источников по очереди =====
+    // Публичные бесплатные API иногда перегружены или временно недоступны —
+    // поэтому если основной источник не ответил, автоматически пробуем следующий.
+
+    // Источник 1 (основной): Google Translate (публичный веб-эндпоинт, без ключа)
     // dt=t   — перевод по смыслу (учитывает контекст всей фразы/предложения)
     // dt=bd  — «словарь»: несколько вариантов перевода по частям речи (для одиночных слов)
-    async function translateWithGoogle(text, isSingleWord) {
-        try {
-            let url = 'https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=ru&dt=t';
-            if (isSingleWord) url += '&dt=bd';
-            url += '&q=' + encodeURIComponent(text);
+    async function translateViaGoogle(text, isSingleWord) {
+        let url = 'https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=ru&dt=t';
+        if (isSingleWord) url += '&dt=bd';
+        url += '&q=' + encodeURIComponent(text);
 
-            const resp = await fetch(url);
-            const data = await resp.json();
+        const resp = await fetch(url);
+        if (!resp.ok) throw new Error('google http ' + resp.status);
+        const data = await resp.json();
 
-            let translation = '';
-            if (Array.isArray(data) && Array.isArray(data[0])) {
-                translation = data[0].map(function(seg) {
-                    return (seg && seg[0]) ? seg[0] : '';
-                }).join('');
-            }
-            translation = translation.trim();
-
-            let variants = null;
-            if (isSingleWord && Array.isArray(data[1])) {
-                const seen = new Set();
-                if (translation) seen.add(translation.toLowerCase());
-                const list = [];
-                data[1].forEach(function(posEntry) {
-                    if (Array.isArray(posEntry) && Array.isArray(posEntry[1])) {
-                        posEntry[1].forEach(function(w) {
-                            const key = String(w).toLowerCase();
-                            if (w && !seen.has(key)) {
-                                seen.add(key);
-                                list.push(w);
-                            }
-                        });
-                    }
-                });
-                if (list.length > 0) variants = list.slice(0, 8);
-            }
-
-            return {
-                translation: translation || '(не удалось перевести)',
-                variants: variants
-            };
-        } catch (e) {
-            return { translation: '(перевод недоступен — нет соединения)', variants: null };
+        let translation = '';
+        if (Array.isArray(data) && Array.isArray(data[0])) {
+            translation = data[0].map(function(seg) {
+                return (seg && seg[0]) ? seg[0] : '';
+            }).join('');
         }
+        translation = translation.trim();
+        if (!translation) throw new Error('google empty translation');
+
+        let variants = null;
+        if (isSingleWord && Array.isArray(data[1])) {
+            const seen = new Set();
+            seen.add(translation.toLowerCase());
+            const list = [];
+            data[1].forEach(function(posEntry) {
+                if (Array.isArray(posEntry) && Array.isArray(posEntry[1])) {
+                    posEntry[1].forEach(function(w) {
+                        const key = String(w).toLowerCase();
+                        if (w && !seen.has(key)) {
+                            seen.add(key);
+                            list.push(w);
+                        }
+                    });
+                }
+            });
+            if (list.length > 0) variants = list.slice(0, 8);
+        }
+
+        return { translation: translation, variants: variants };
     }
 
-    // ===== Транскрипция произношения через Wiktionary (для фраз из 3 слов и менее) =====
-    // Берём "сырой" wikitext страницы — там IPA всегда записана в чётком шаблоне
-    // {{IPA|en|/.../}}, в отличие от HTML-вёрстки, которая часто меняется.
-    async function getWordIPA(word) {
-        const clean = word.replace(/[^a-zA-Z'-]/g, '');
-        if (!clean) return null;
+    // Источник 2 (резервный): MyMemory — простой перевод без вариантов значений
+    async function translateViaMyMemory(text) {
+        const url = 'https://api.mymemory.translated.net/get?q=' +
+            encodeURIComponent(text) + '&langpair=en|ru';
+        const resp = await fetch(url);
+        if (!resp.ok) throw new Error('mymemory http ' + resp.status);
+        const data = await resp.json();
+        const translation = data && data.responseData && data.responseData.translatedText;
+        if (!translation) throw new Error('mymemory empty');
+        return { translation: translation.trim(), variants: null };
+    }
+
+    // Источник 3 (последний резерв): публичный сервер LibreTranslate
+    async function translateViaLibre(text) {
+        const resp = await fetch('https://libretranslate.de/translate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ q: text, source: 'en', target: 'ru', format: 'text' })
+        });
+        if (!resp.ok) throw new Error('libre http ' + resp.status);
+        const data = await resp.json();
+        if (!data || !data.translatedText) throw new Error('libre empty');
+        return { translation: data.translatedText.trim(), variants: null };
+    }
+
+    async function translateWithGoogle(text, isSingleWord) {
+        const providers = [
+            function() { return translateViaGoogle(text, isSingleWord); },
+            function() { return translateViaMyMemory(text); },
+            function() { return translateViaLibre(text); }
+        ];
+        for (const provider of providers) {
+            try {
+                const result = await provider();
+                if (result && result.translation) return result;
+            } catch (e) {
+                // не получилось — пробуем следующий источник
+            }
+        }
+        return { translation: '(перевод недоступен — все источники перегружены)', variants: null };
+    }
+
+    // ===== Транскрипция произношения: несколько источников по очереди =====
+    // Если основной источник (Wiktionary) перегружен или не содержит статью —
+    // автоматически пробуем следующий, и так до последнего.
+
+    // Источник 1 (основной): Wiktionary — берём "сырой" wikitext страницы, там
+    // IPA всегда записана в чётком шаблоне {{IPA|en|/.../}}, в отличие от HTML-вёрстки,
+    // которая часто меняется.
+    async function getWordIPAviaWiktionary(clean) {
         try {
             const url = 'https://en.wiktionary.org/w/api.php?action=parse&page=' +
                 encodeURIComponent(clean.toLowerCase()) +
@@ -512,6 +471,64 @@ document.addEventListener("DOMContentLoaded", function() {
         } catch (e) {
             return null;
         }
+    }
+
+    // Источник 2 (резервный): dictionaryapi.dev
+    async function getWordIPAviaDictionaryApi(clean) {
+        try {
+            const url = 'https://api.dictionaryapi.dev/api/v2/entries/en/' +
+                encodeURIComponent(clean.toLowerCase());
+            const resp = await fetch(url);
+            if (!resp.ok) return null;
+            const data = await resp.json();
+            if (Array.isArray(data)) {
+                for (const entry of data) {
+                    if (entry.phonetic) return entry.phonetic;
+                    if (Array.isArray(entry.phonetics)) {
+                        for (const p of entry.phonetics) {
+                            if (p.text) return p.text;
+                        }
+                    }
+                }
+            }
+            return null;
+        } catch (e) {
+            return null;
+        }
+    }
+
+    // Источник 3 (последний резерв): Datamuse — даёт приближённое произношение
+    // в алфавите ARPAbet (не настоящий IPA, но лучше, чем ничего), оборачиваем в [ ].
+    async function getWordIPAviaDatamuse(clean) {
+        try {
+            const url = 'https://api.datamuse.com/words?sp=' +
+                encodeURIComponent(clean.toLowerCase()) + '&md=r&max=1';
+            const resp = await fetch(url);
+            if (!resp.ok) return null;
+            const data = await resp.json();
+            if (Array.isArray(data) && data[0] && Array.isArray(data[0].tags)) {
+                const pronTag = data[0].tags.find(function(t) { return t.indexOf('pron:') === 0; });
+                if (pronTag) {
+                    const approx = pronTag.slice(5).replace(/[0-9]/g, '').toLowerCase();
+                    return '[' + approx + ']';
+                }
+            }
+            return null;
+        } catch (e) {
+            return null;
+        }
+    }
+
+    async function getWordIPA(word) {
+        const clean = word.replace(/[^a-zA-Z'-]/g, '');
+        if (!clean) return null;
+
+        const sources = [getWordIPAviaWiktionary, getWordIPAviaDictionaryApi, getWordIPAviaDatamuse];
+        for (const source of sources) {
+            const result = await source(clean);
+            if (result) return result;
+        }
+        return null;
     }
 
     async function getTranscription(text) {
@@ -585,159 +602,42 @@ document.addEventListener("DOMContentLoaded", function() {
         }
     }
 
-    // ===== Фиксированная область "Сохранить / Прослушать" под главной панелью =====
+    // ===== Кнопка "Сохранить" в главной панели =====
+    // Отображается постоянно. При нажатии проверяет, есть ли в данный момент
+    // выделенный текст внутри книги — если да, сохраняет его в словарь;
+    // если нет, сообщает об этом и ничего не делает. Никаких всплывающих
+    // окон или дополнительных панелей при выделении текста больше не появляется.
     const bookContent = document.getElementById('book-content');
-    const bookmarkPanel = document.getElementById('bookmark-panel');
-    const selectionArea = document.getElementById('selection-area');
-    const selectionToolbar = document.getElementById('selection-toolbar');
     const saveSelBtn = document.getElementById('save-selection-btn');
-    const listenSelBtn = document.getElementById('listen-selection-btn');
-    let currentSelectionText = '';
-
-    // ===== Всплывающее окно с переводом (для одного слова — с транскрипцией
-    // и вариантами значений; для фразы/предложения — с одним переводом по смыслу) =====
-    const wordPopup = document.getElementById('word-popup');
-    const wordPopupTranscriptionRow = document.getElementById('word-popup-transcription-row');
-    const wordPopupTranscription = document.getElementById('word-popup-transcription');
-    const wordPopupVariants = document.getElementById('word-popup-variants');
-    const wordPopupSpeakBtn = document.getElementById('word-popup-speak-btn');
-    let currentPopupText = '';
-    let wordRequestToken = 0;
-
-    function hideWordPopup() {
-        wordPopup.style.display = 'none';
-        currentPopupText = '';
-        wordRequestToken++;
-    }
-
-    function hideSaveBtn() {
-        selectionToolbar.style.display = 'none';
-        currentSelectionText = '';
-        hideWordPopup();
-    }
-
-    // Область "Сохранить/Прослушать" всегда стоит чуть ниже главной панели,
-    // независимо от того, где на странице находится выделенный текст.
-    function positionSelectionArea() {
-        const rect = bookmarkPanel.getBoundingClientRect();
-        selectionArea.style.top = (rect.bottom + 10) + 'px';
-    }
-    positionSelectionArea();
-    window.addEventListener('resize', positionSelectionArea);
-
-    async function showPopupFor(text, isSingleWord) {
-        const myToken = ++wordRequestToken;
-        currentPopupText = text;
-
-        wordPopupVariants.textContent = 'Перевод…';
-        wordPopup.style.display = 'block';
-
-        if (isSingleWord) {
-            // Одиночное слово: показываем транскрипцию и несколько вариантов перевода
-            wordPopupTranscriptionRow.style.display = 'flex';
-            wordPopupTranscription.textContent = '…';
-
-            const [result, transcription] = await Promise.all([
-                translateWithGoogle(text, true),
-                getTranscription(text)
-            ]);
-
-            if (myToken !== wordRequestToken) return;
-
-            wordPopupTranscription.textContent = transcription || '(транскрипция не найдена)';
-
-            const allVariants = [];
-            if (result.translation) allVariants.push(result.translation);
-            if (result.variants && result.variants.length) {
-                result.variants.forEach(function(v) {
-                    if (allVariants.indexOf(v) === -1) allVariants.push(v);
-                });
-            }
-
-            wordPopupVariants.innerHTML = '';
-            if (allVariants.length === 0) {
-                wordPopupVariants.textContent = '(перевод не найден)';
-            } else {
-                allVariants.forEach(function(v) {
-                    const line = document.createElement('div');
-                    line.textContent = v;
-                    wordPopupVariants.appendChild(line);
-                });
-            }
-        } else {
-            // Фраза или предложение: только один перевод по смыслу, без транскрипции
-            wordPopupTranscriptionRow.style.display = 'none';
-
-            const result = await translateWithGoogle(text, false);
-
-            if (myToken !== wordRequestToken) return;
-
-            wordPopupVariants.innerHTML = '';
-            const line = document.createElement('div');
-            line.textContent = result.translation || '(перевод не найден)';
-            wordPopupVariants.appendChild(line);
-        }
-    }
-
-    wordPopupSpeakBtn.addEventListener('click', function() {
-        playPronunciation(currentPopupText);
-    });
-
-    function updateToolbarFromSelection() {
-        const selection = window.getSelection();
-        const text = selection && selection.toString().trim();
-
-        if (!text || selection.rangeCount === 0) {
-            hideSaveBtn();
-            return;
-        }
-
-        const range = selection.getRangeAt(0);
-        const anchorNode = range.commonAncestorContainer;
-        const container = anchorNode.nodeType === 3 ? anchorNode.parentElement : anchorNode;
-        if (!bookContent || !bookContent.contains(container)) {
-            hideSaveBtn();
-            return;
-        }
-
-        const cleanText = text.replace(/\s+/g, ' ').trim();
-        currentSelectionText = cleanText;
-        selectionToolbar.style.display = 'flex';
-
-        const words = cleanText.split(' ').filter(Boolean);
-        const isSingleWord = words.length === 1;
-
-        if (cleanText !== currentPopupText) {
-            showPopupFor(cleanText, isSingleWord);
-        }
-    }
-
-    // Событие "selectionchange" срабатывает одинаково и при выделении мышью на компьютере,
-    // и при выделении пальцем / через системные "ручки" выделения на телефоне —
-    // в отличие от mouseup, который на мобильных устройствах не даёт нужного результата.
-    let selectionDebounce = null;
-    document.addEventListener('selectionchange', function() {
-        clearTimeout(selectionDebounce);
-        selectionDebounce = setTimeout(updateToolbarFromSelection, 200);
-    });
-
-    // Не даём нажатию мышью на область сбросить выделение текста до срабатывания клика.
-    // Важно: НЕ делаем то же самое для touchstart — preventDefault() там отменяет
-    // последующее событие click на мобильных устройствах.
-    selectionArea.addEventListener('mousedown', function(e) { e.preventDefault(); });
-
-    listenSelBtn.addEventListener('click', function() {
-        playPronunciation(currentSelectionText);
-    });
 
     saveSelBtn.addEventListener('click', async function() {
-        const text = currentSelectionText;
-        if (!text) return;
+        const selection = window.getSelection();
+        const rawText = selection ? selection.toString().trim() : '';
 
+        let insideBook = false;
+        if (rawText && selection.rangeCount > 0) {
+            try {
+                const range = selection.getRangeAt(0);
+                const anchorNode = range.commonAncestorContainer;
+                const container = anchorNode.nodeType === 3 ? anchorNode.parentElement : anchorNode;
+                insideBook = !!(bookContent && bookContent.contains(container));
+            } catch (e) {
+                insideBook = false;
+            }
+        }
+
+        if (!rawText || !insideBook) {
+            alert('Сначала выделите слово, фразу или предложение в тексте книги.');
+            return;
+        }
+
+        const text = rawText.replace(/\s+/g, ' ').trim();
+
+        const originalLabel = saveSelBtn.textContent;
         saveSelBtn.textContent = '⏳ Сохраняю...';
         saveSelBtn.disabled = true;
 
-        const wordCount = text.trim().split(/\s+/).filter(Boolean).length;
+        const wordCount = text.split(' ').filter(Boolean).length;
         const isSingleWord = wordCount === 1;
 
         const result = await translateWithGoogle(text, isSingleWord);
@@ -755,9 +655,8 @@ document.addEventListener("DOMContentLoaded", function() {
         library.push(entry);
         saveList(LIB_KEY, library);
 
-        saveSelBtn.textContent = '⭐ Сохранить';
+        saveSelBtn.textContent = originalLabel;
         saveSelBtn.disabled = false;
-        hideSaveBtn();
         window.getSelection().removeAllRanges();
     });
 
