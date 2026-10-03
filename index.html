@@ -627,7 +627,11 @@ document.addEventListener("DOMContentLoaded", function() {
         }
 
         if (!rawText || !insideBook) {
-            alert('Сначала выделите слово, фразу или предложение в тексте книги.');
+            const originalLabel = saveSelBtn.textContent;
+            saveSelBtn.textContent = 'Выделите текст';
+            setTimeout(function() {
+                saveSelBtn.textContent = originalLabel;
+            }, 2000);
             return;
         }
 
